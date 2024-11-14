@@ -14,6 +14,7 @@ function error(...args) {
 
 let quizData = null;
 let observer = null;
+let gameObserver = null;
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -23,9 +24,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         initHelper(request.gameCode);
     }
     
-    // Always return true for async response
     return true;
 });
+
+function sanitizeText(text) {
+    return text
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/<[^>]*>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
 async function initHelper(gameCode) {
     log('Initializing helper with game code:', gameCode);
@@ -52,7 +64,9 @@ async function initHelper(gameCode) {
             throw new Error('API returned error: ' + JSON.stringify(quizData));
         }
 
+        // Start both observers
         startQuestionObserver();
+        startGameObserver();
         
     } catch (err) {
         error('Failed to initialize helper:', err);
@@ -63,22 +77,20 @@ async function initHelper(gameCode) {
 function startQuestionObserver() {
     log('Starting question observer');
     
-    // Cleanup existing observer
     if (observer) {
         observer.disconnect();
-        log('Disconnected existing observer');
+        log('Disconnected existing question observer');
     }
 
     observer = new MutationObserver((mutations) => {
-        log('DOM mutation detected:', mutations);
+        log('Question DOM mutation detected');
         highlightAnswer();
     });
 
-    // Find question container
-    const questionContainer = document.querySelector('[data-v-94904112]');
-    if (questionContainer) {
-        log('Found question container:', questionContainer);
-        observer.observe(questionContainer, {
+    // Observe the entire game container for question changes
+    const gameContainer = document.querySelector('body');
+    if (gameContainer) {
+        observer.observe(gameContainer, {
             childList: true,
             subtree: true,
             characterData: true
@@ -87,7 +99,33 @@ function startQuestionObserver() {
         // Initial highlight
         highlightAnswer();
     } else {
-        error('Question container not found');
+        error('Game container not found');
+    }
+}
+
+function startGameObserver() {
+    log('Starting game observer');
+    
+    if (gameObserver) {
+        gameObserver.disconnect();
+        log('Disconnected existing game observer');
+    }
+
+    gameObserver = new MutationObserver((mutations) => {
+        log('Game DOM mutation detected');
+        const questionElement = document.querySelector('[data-v-94904112]');
+        if (questionElement) {
+            highlightAnswer();
+        }
+    });
+
+    // Observe the entire body for game state changes
+    const body = document.querySelector('body');
+    if (body) {
+        gameObserver.observe(body, {
+            childList: true,
+            subtree: true
+        });
     }
 }
 
@@ -97,42 +135,73 @@ function highlightAnswer() {
         return;
     }
 
-    // Get current question
     const questionElement = document.querySelector('[data-v-94904112]');
     if (!questionElement) {
         error('Question element not found');
         return;
     }
 
-    const questionText = questionElement.textContent.trim();
-    log('Current question:', questionText);
+    const questionText = sanitizeText(questionElement.textContent);
+    log('Current question (sanitized):', questionText);
 
     // Find matching question
-    const questionData = quizData.questions.find(q => 
-        q.structure.query.text.trim() === questionText
-    );
+    const questionData = quizData.questions.find(q => {
+        const apiQuestionText = sanitizeText(q.structure.query.text);
+        const matches = apiQuestionText === questionText;
+        log('Comparing:', { 
+            dom: questionText, 
+            api: apiQuestionText, 
+            matches 
+        });
+        return matches;
+    });
 
     if (!questionData) {
         error('Question not found in data');
+        log('Available questions:', quizData.questions.map(q => sanitizeText(q.structure.query.text)));
         return;
     }
 
     log('Found matching question data:', questionData);
 
     const correctAnswerIndex = questionData.structure.answer;
-    const correctAnswerText = questionData.structure.options[correctAnswerIndex].text;
+    const correctAnswerText = sanitizeText(questionData.structure.options[correctAnswerIndex].text);
     log('Correct answer:', correctAnswerText);
 
-    // Find all option elements
-    const optionElements = document.querySelectorAll('.option-content, [class*="option"]');
+    // Try multiple possible selectors for options
+    const optionSelectors = [
+        '.option-content',
+        '[class*="option"]',
+        '[class*="answer"]',
+        '[role="button"]'
+    ];
+
+    let optionElements = [];
+    for (const selector of optionSelectors) {
+        const elements = document.querySelectorAll(selector);
+        if (elements.length > 0) {
+            optionElements = elements;
+            log('Found options using selector:', selector);
+            break;
+        }
+    }
+
     log('Found option elements:', optionElements);
 
     optionElements.forEach((option, index) => {
-        const optionText = option.textContent.trim();
+        const optionText = sanitizeText(option.textContent);
         log(`Option ${index}:`, optionText);
         
         if (optionText === correctAnswerText) {
             log('Highlighting correct answer:', option);
+            
+            // Remove previous highlights
+            optionElements.forEach(el => {
+                el.style.backgroundColor = '';
+                el.style.border = '';
+            });
+
+            // Add new highlight
             option.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
             option.style.border = '2px solid #4CAF50';
         }

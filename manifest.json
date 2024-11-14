@@ -5,10 +5,12 @@
   "description": "Helps with Quizizz answers",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "https://v3.schoolcheats.net/*",
+    "https://schoolcheats.net/*",
     "https://quizizz.com/*"
   ],
   "action": {

@@ -15,6 +15,147 @@ function error(...args) {
 let quizData = null;
 let observer = null;
 let gameObserver = null;
+let originalHandlers = {};
+let intervalChecks = null;
+
+function createConstantProperty(obj, prop, value) {
+    Object.defineProperty(obj, prop, {
+        enumerable: true,
+        configurable: false,
+        get: () => value,
+        set: () => {} // No-op setter
+    });
+}
+
+function overrideAllVisibilityAPIs() {
+    log('Implementing comprehensive visibility protection...');
+
+    // Store original handlers
+    originalHandlers = {
+        visibilitychange: document.onvisibilitychange,
+        blur: window.onblur,
+        focus: window.onfocus,
+        mouseleave: document.onmouseleave,
+        mouseenter: document.onmouseenter,
+        keydown: document.onkeydown,
+        contextmenu: document.oncontextmenu
+    };
+
+    // Override document visibility properties
+    createConstantProperty(document, 'hidden', false);
+    createConstantProperty(document, 'visibilityState', 'visible');
+    createConstantProperty(document, 'webkitHidden', false);
+    createConstantProperty(document, 'webkitVisibilityState', 'visible');
+
+    // Override window properties
+    createConstantProperty(window, 'onblur', null);
+    createConstantProperty(window, 'onfocus', null);
+
+    // Block all potential detection events
+    const eventsToBlock = [
+        'visibilitychange',
+        'webkitvisibilitychange',
+        'blur',
+        'focus',
+        'focusin',
+        'focusout',
+        'mouseleave',
+        'mouseenter',
+        'mousemove',
+        'beforeunload',
+        'unload',
+        'pagehide',
+        'pageshow',
+        'resize',
+        'storage',
+        'contextmenu'
+    ];
+
+    // Capture and prevent all events
+    eventsToBlock.forEach(eventName => {
+        window.addEventListener(eventName, (e) => {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+        }, true);
+
+        document.addEventListener(eventName, (e) => {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+        }, true);
+    });
+
+    // Override performance API
+    const originalNow = performance.now.bind(performance);
+    performance.now = () => {
+        return originalNow(); // Return actual time to avoid detection of time-based checks
+    };
+
+    // Override requestAnimationFrame to maintain smooth animations
+    const originalRAF = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => {
+        return originalRAF(callback);
+    };
+
+    // Prevent iframe detection
+    const style = document.createElement('style');
+    style.textContent = `
+        * { animation-duration: 0.001s !important; }
+        @keyframes nodeInserted { from { opacity: 0.99; } to { opacity: 1; } }
+    `;
+    document.head.appendChild(style);
+
+    // Handle Alt+Tab detection
+    document.addEventListener('keydown', (e) => {
+        if (e.altKey) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+        }
+    }, true);
+
+    // Periodic check to ensure our overrides stay in place
+    intervalChecks = setInterval(() => {
+        // Reapply visibility state
+        createConstantProperty(document, 'visibilityState', 'visible');
+        createConstantProperty(document, 'hidden', false);
+
+        // Check for and remove any new visibility detection scripts
+        const scripts = document.getElementsByTagName('script');
+        for (const script of scripts) {
+            if (script.textContent.includes('visibilitychange') || 
+                script.textContent.includes('blur') || 
+                script.textContent.includes('focus')) {
+                script.remove();
+            }
+        }
+
+        // Force focus on the window
+        window.focus();
+    }, 1000);
+
+    // Override console methods to hide our tracks
+    if (!DEBUG) {
+        const noOp = () => {};
+        ['log', 'warn', 'error', 'info', 'debug'].forEach(method => {
+            console[method] = noOp;
+        });
+    }
+
+    // Handle browser-specific cases
+    if (navigator.userAgent.includes('Firefox')) {
+        window.mozHidden = false;
+        window.mozVisibilityState = 'visible';
+    } else if (navigator.userAgent.includes('Chrome')) {
+        window.chrome.runtime.sendMessage = new Proxy(chrome.runtime.sendMessage, {
+            apply: (target, thisArg, args) => {
+                // Filter out visibility-related messages
+                if (args[0]?.type?.includes('visibility')) {
+                    return;
+                }
+                return Reflect.apply(target, thisArg, args);
+            }
+        });
+    }
+}
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -43,6 +184,9 @@ async function initHelper(gameCode) {
     log('Initializing helper with game code:', gameCode);
     
     try {
+        // Add comprehensive visibility protection
+        overrideAllVisibilityAPIs();
+        
         // Fetch answers
         log('Fetching answers...');
         const response = await fetch('https://v3.schoolcheats.net/quizizz/answers', {
@@ -70,6 +214,10 @@ async function initHelper(gameCode) {
         
     } catch (err) {
         error('Failed to initialize helper:', err);
+        // Cleanup if initialization fails
+        if (intervalChecks) {
+            clearInterval(intervalChecks);
+        }
         throw err;
     }
 }
@@ -217,4 +365,15 @@ function highlightAnswer() {
 }
 
 // Initial setup
-log('Content script loaded'); 
+log('Content script loaded');
+
+// Add cleanup function for when helper is stopped
+function stopHelper() {
+    if (intervalChecks) {
+        clearInterval(intervalChecks);
+    }
+    // Restore original handlers if needed
+    Object.entries(originalHandlers).forEach(([event, handler]) => {
+        document[`on${event}`] = handler;
+    });
+} 

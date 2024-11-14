@@ -129,6 +129,44 @@ function startGameObserver() {
     }
 }
 
+function getCurrentOptions() {
+    // Get all option buttons
+    const optionButtons = document.querySelectorAll('button[role="option"]');
+    
+    // Extract text from each option
+    return Array.from(optionButtons).map(button => {
+        const textElement = button.querySelector('.resizeable.gap-x-2');
+        return textElement ? sanitizeText(textElement.textContent) : '';
+    });
+}
+
+function findMatchingQuestion(questionText) {
+    log('Finding matching question for:', questionText);
+    
+    // Get current visible options
+    const currentOptions = getCurrentOptions();
+    log('Current visible options:', currentOptions);
+
+    // Find all questions with matching text
+    const matchingQuestions = quizData.questions.filter(q => 
+        sanitizeText(q.structure.query.text) === questionText
+    );
+    
+    log('Found questions with matching text:', matchingQuestions.length);
+
+    // Compare options to find exact match
+    const exactMatch = matchingQuestions.find(q => {
+        const apiOptions = q.structure.options.map(opt => sanitizeText(opt.text));
+        log('Comparing with API options:', apiOptions);
+        
+        // Check if arrays have same elements (order doesn't matter)
+        return currentOptions.length === apiOptions.length &&
+            currentOptions.every(opt => apiOptions.includes(opt));
+    });
+
+    return exactMatch || null;
+}
+
 function highlightAnswer() {
     if (!quizData) {
         error('No quiz data available');
@@ -144,21 +182,11 @@ function highlightAnswer() {
     const questionText = sanitizeText(questionElement.textContent);
     log('Current question (sanitized):', questionText);
 
-    // Find matching question
-    const questionData = quizData.questions.find(q => {
-        const apiQuestionText = sanitizeText(q.structure.query.text);
-        const matches = apiQuestionText === questionText;
-        log('Comparing:', { 
-            dom: questionText, 
-            api: apiQuestionText, 
-            matches 
-        });
-        return matches;
-    });
+    // Find matching question using new logic
+    const questionData = findMatchingQuestion(questionText);
 
     if (!questionData) {
         error('Question not found in data');
-        log('Available questions:', quizData.questions.map(q => sanitizeText(q.structure.query.text)));
         return;
     }
 
@@ -168,42 +196,22 @@ function highlightAnswer() {
     const correctAnswerText = sanitizeText(questionData.structure.options[correctAnswerIndex].text);
     log('Correct answer:', correctAnswerText);
 
-    // Try multiple possible selectors for options
-    const optionSelectors = [
-        '.option-content',
-        '[class*="option"]',
-        '[class*="answer"]',
-        '[role="button"]'
-    ];
+    // Get all option buttons
+    const optionButtons = document.querySelectorAll('button[role="option"]');
+    
+    // Remove previous highlights
+    optionButtons.forEach(button => {
+        button.style.backgroundColor = '';
+        button.style.border = '';
+    });
 
-    let optionElements = [];
-    for (const selector of optionSelectors) {
-        const elements = document.querySelectorAll(selector);
-        if (elements.length > 0) {
-            optionElements = elements;
-            log('Found options using selector:', selector);
-            break;
-        }
-    }
-
-    log('Found option elements:', optionElements);
-
-    optionElements.forEach((option, index) => {
-        const optionText = sanitizeText(option.textContent);
-        log(`Option ${index}:`, optionText);
-        
-        if (optionText === correctAnswerText) {
-            log('Highlighting correct answer:', option);
-            
-            // Remove previous highlights
-            optionElements.forEach(el => {
-                el.style.backgroundColor = '';
-                el.style.border = '';
-            });
-
-            // Add new highlight
-            option.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
-            option.style.border = '2px solid #4CAF50';
+    // Find and highlight correct answer
+    optionButtons.forEach(button => {
+        const textElement = button.querySelector('.resizeable.gap-x-2');
+        if (textElement && sanitizeText(textElement.textContent) === correctAnswerText) {
+            log('Highlighting correct answer:', textElement.textContent);
+            button.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
+            button.style.border = '2px solid #4CAF50';
         }
     });
 }
